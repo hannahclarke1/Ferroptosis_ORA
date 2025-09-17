@@ -1,0 +1,495 @@
+---
+title: "Ferroptosis enrichment analyses"
+author: "Hannah Lucas-Clarke" 
+engine: knitr
+toc: true
+toc-depth: 3
+toc-expand: true
+toc-title: Navigate
+format:
+  html:
+    embed-resources: true
+---
+
+```{r}
+#| label: Load packages
+#| error: false
+#| warning: false
+#| echo: false
+#| output: false 
+library("tidyverse")
+library("purrr")
+library("ComplexHeatmap")
+library("clusterProfiler")
+library("devtools")
+library("RColorBrewer")
+library("colorRamp2")
+library("ComplexHeatmap")
+library("grid")
+library("gridExtra")
+```
+
+**FIGURE 1**
+
+1. mDA Athauda 2024 paper --> SNCA vs control 
+2. Evans 2025 bulk just collapsed all-brain data --> PD vs. control 
+3. Keo 2020 --> Braak PD region stage 1 vs. 6
+4. Jian 2022 --> PD vs. NC age matched 
+
+I am using 19,708 unique genes from Evans 2025 bulk as the universe. 
+
+```{r}
+#| label: Import datasets 
+#| error: false
+#| warning: false
+#| echo: false
+#| output: false 
+
+universe <- read.csv("./data/Evans_2025/Bulk all genes.csv") %>% filter(tissue=="Collapse-All Brain") %>% select(SYMBOL) %>% unique()
+universe <- as.character(universe$SYMBOL)
+
+Athauda_2024 <- read.csv("./data/Athauda_2024/Bulk_RNAseq_mDA_4vs6wk/mDA_4vs6wk_Differentially_expressed_genes_DESeq2_6wk.csv") %>% dplyr::select(symbol,log2FoldChange) %>% unique() %>% set_names(c("Gene","logFC"))
+
+Keo_2020 <- read.csv("./data/Keo et al, 2020/42003_2020_804_MOESM2_ESM.csv") %>% dplyr::select(Gene.symbol,Fold.change.between.R1.and.R6) %>% unique() %>% set_names(c("Gene","logFC"))
+
+Jian_2022 <- read.csv("./data/Jian et al, 2022/Jian_2022_agematched.csv") %>% dplyr::select(Gene.Symbol,logFC) %>% unique() %>% set_names(c("Gene","logFC"))
+
+Evans_2025 <- read.csv("./data/Evans_2025/Bulk all genes.csv") %>% filter(sig_reg!="Unchanged") %>% filter(tissue=="Collapse-All Brain") %>% select(SYMBOL,logFC) %>% unique() %>% set_names(c("Gene","logFC"))
+
+all_bulk <- list(Athauda_2024 = Athauda_2024$Gene, Keo_2020 = Keo_2020$Gene, Jian_2022 = Jian_2022$Gene, Evans_2025 = Evans_2025$Gene)
+
+all_bulk_withLFC <- list(Athauda_2024 = Athauda_2024, Keo_2020 = Keo_2020, Jian_2022 = Jian_2022, Evans_2025 = Evans_2025)
+
+rm(Athauda_2024)
+rm(Keo_2020)
+rm(Jian_2022)
+rm(Evans_2025)
+```
+
+Then importing Ferroptosis genes from FerrDb - Driver, marker and suppressor in one file.
+
+```{r}
+#| label: Import datasets Ferr
+#| error: false
+#| warning: false
+#| echo: false
+#| output: true
+driver <- read.csv("./data/ferrDB/ferroptosis_driver.csv") %>%
+  select(symbol) 
+marker <- read.csv("./data/ferroptosis_marker.csv") %>%
+  select(symbol)
+suppressor <- read.csv("./data/ferroptosis_suppressor.csv") %>% select(symbol)
+
+T2G <- c(driver,marker,suppressor) %>% unlist() %>% unique() %>% as.data.frame()
+T2G$Term <- "Ferroptosis"
+T2G <- data.frame(T2G$Term,T2G$.)
+names(T2G) <- c("Term","Gene")
+
+```
+
+Now loop through bulk datasets and compare to ferroptosis dataset.
+
+### BULK ORA 
+
+ORA - this just looks at the genes and does a Fischer test to see if they are over represented in the dataset (just on DEGs).
+
+```{r}
+#| label: ORA
+#| error: false
+#| warning: false
+#| echo: true
+#| output: true
+options(enrichment_force_universe = TRUE)
+results_list_ORA <- list()
+
+for (x in 1:length(all_bulk)) {
+  results_list_ORA[[x]] <- enricher(gene = all_bulk[[x]], 
+                                    qvalueCutoff = 0.2, 
+                                    pvalueCutoff = 0.05, 
+                                    pAdjustMethod = "BH", 
+                                    universe = universe, 
+                                    minGSSize = 10,
+                                    maxGSSize = 500,
+                                    gson = NULL,
+                                    TERM2NAME = NULL,
+                                    TERM2GENE = T2G)}
+```
+
+
+```{r}
+#| label: Extracting pvalues
+#| error: false
+#| warning: false
+#| echo: false
+#| output: false
+pvals<- list()
+
+for (x in 1:length(results_list_ORA)) {
+  if (!is.null(results_list_ORA[[x]])) {
+    pvals[[x]] <- results_list_ORA[[x]]@result$p.adjust
+    names(pvals[[x]]) <- results_list_ORA[[x]]@result$Description
+  } else {
+    pvals[[x]] <- NA
+    names(pvals[[x]]) <- NA
+    }
+      
+}
+
+names(pvals) <- names(all_bulk)
+pvals <- bind_rows(lapply(pvals, function(x) as.data.frame(t(x))), .id = "ID")
+pvals$...1 <- NULL
+rownames(pvals) <- pvals$ID
+
+pvals$ID <- NULL
+pvals <- as.matrix(pvals)
+```
+
+
+```{r, fig.height=4,fig.width = 10.5}
+#| label: Heatmaps
+#| error: false
+#| warning: false
+#| echo: false
+#| output: true
+geneID<- list()
+for (x in 1:length(results_list_ORA)) {
+  if (!is.null(results_list_ORA[[x]])) {
+    geneID[[x]] <- results_list_ORA[[x]]@result$geneID %>% str_split(.,"/")
+  } else {
+    geneID[[x]] <- NA
+    names(geneID[[x]]) <- NA
+    }
+}
+names(geneID) <- names(all_bulk)
+print(geneID)
+
+ID_intersect <- list()
+for (x in 1:length(geneID)) {
+  ID_intersect[[x]] <- data.frame(Gene = geneID[[x]][[1]]) %>% left_join(T2G, by = "Gene") %>% left_join(all_bulk_withLFC[[x]], by = "Gene")
+}
+
+names(ID_intersect) <- names(geneID)
+
+col_fun2 <- colorRamp2(c(0, 0.05, 0.1), c("deeppink4", "beige", "white"))
+
+# Athauda 2024 
+logFC_matrix_Athauda <- as.matrix(ID_intersect$Athauda_2024$logFC)
+rownames(logFC_matrix_Athauda) <- paste(ID_intersect$Athauda_2024$Gene)
+logFC_matrix_Athauda <- logFC_matrix_Athauda[order(logFC_matrix_Athauda[, 1], decreasing = TRUE), , drop = FALSE]
+
+#names of the columns to be bold
+bold_columns <- c("GCH1", "ALOX5", "ALOX15B","ALOX12B", "GPX4", "SNCA")
+is_bold <- rownames(logFC_matrix_Athauda) %in% bold_columns
+
+Heatmap(
+  logFC_matrix_Athauda,
+  name = "LFC",
+  heatmap_legend_param = list(title_gp = gpar(fontsize=9, fontface="bold")),
+  column_title = c("Athauda 2024"),
+  column_title_gp = gpar(fontsize = 11, fontface = "bold"),
+  row_names_side = "left",
+  cluster_rows = FALSE,
+  cluster_columns = FALSE,
+  show_row_names = TRUE,
+  row_names_gp = gpar(fontsize = 9.5, fontface = ifelse(is_bold, "bold", "plain")),
+  heatmap_width = unit(3.5, "cm"),
+  heatmap_height = unit(nrow(logFC_matrix_Athauda) * 0.6, "cm"),
+  column_names_side = "top",
+)
+
+#Keo 2020
+logFC_matrix_Keo <- as.matrix(ID_intersect$Keo_2020$logFC)
+rownames(logFC_matrix_Keo) <- paste(ID_intersect$Keo_2020$Gene)
+logFC_matrix_Keo <- logFC_matrix_Keo[order(logFC_matrix_Keo[, 1], decreasing = TRUE), , drop = FALSE]
+
+is_bold <- rownames(logFC_matrix_Keo) %in% bold_columns
+
+Heatmap(
+  logFC_matrix_Keo,
+  name = "LFC",
+  heatmap_legend_param = list(title_gp = gpar(fontsize=9, fontface="bold")),
+  column_title = c("Keo 2020"),
+  column_title_gp = gpar(fontsize = 11, fontface = "bold"),
+  row_names_side = "left",
+  cluster_rows = FALSE,
+  cluster_columns = FALSE,
+  show_row_names = TRUE,
+  row_names_gp = gpar(fontsize = 9.5, fontface = ifelse(is_bold, "bold", "plain")),
+  heatmap_width = unit(3.5, "cm"),
+  heatmap_height = unit(nrow(logFC_matrix_Keo) * 0.6, "cm"),
+  column_names_side = "top",
+)
+
+
+#Jian 2022
+logFC_matrix_jian <- as.matrix(ID_intersect$Jian_2022$logFC)
+rownames(logFC_matrix_jian) <- paste(ID_intersect$Jian_2022$Gene)
+logFC_matrix_jian <- logFC_matrix_jian[order(logFC_matrix_jian[, 1], decreasing = TRUE), , drop = FALSE]
+
+is_bold <- rownames(logFC_matrix_jian) %in% bold_columns
+
+Heatmap(
+  logFC_matrix_jian,
+  name = "LFC",
+  heatmap_legend_param = list(title_gp = gpar(fontsize=9, fontface="bold")),
+  column_title = c("Jian 2022"),
+  column_title_gp = gpar(fontsize = 11, fontface = "bold"),
+  row_names_side = "left",
+  cluster_rows = FALSE,
+  cluster_columns = FALSE,
+  show_row_names = TRUE,
+  row_names_gp = gpar(fontsize = 9.5, fontface = ifelse(is_bold, "bold", "plain")),
+  heatmap_width = unit(3.5, "cm"),
+  heatmap_height = unit(nrow(logFC_matrix_jian) * 0.6, "cm"),
+  column_names_side = "top",
+)
+
+#Evans 2025
+logFC_matrix_evans <- as.matrix(ID_intersect$Evans_2025$logFC)
+rownames(logFC_matrix_evans) <- paste(ID_intersect$Evans_2025$Gene)
+logFC_matrix_evans <- logFC_matrix_evans[order(logFC_matrix_evans[, 1], decreasing = TRUE), , drop = FALSE]
+
+is_bold <- rownames(logFC_matrix_evans) %in% bold_columns
+
+Heatmap(
+  logFC_matrix_evans,
+  name = "LFC",
+  heatmap_legend_param = list(title_gp = gpar(fontsize=9, fontface="bold")),
+  column_title = c("Evans 2024"),
+  column_title_gp = gpar(fontsize = 11, fontface = "bold"),
+  row_names_side = "left",
+  cluster_rows = FALSE,
+  cluster_columns = FALSE,
+  show_row_names = TRUE,
+  row_names_gp = gpar(fontsize = 9.5, fontface = ifelse(is_bold, "bold", "plain")),
+  heatmap_width = unit(3.5, "cm"),
+  heatmap_height = unit(nrow(logFC_matrix_evans) * 0.6, "cm"),
+  column_names_side = "top",
+)
+
+
+
+# pvalues  heatmap 
+
+Heatmap(
+  pvals,
+  col= col_fun2,
+  cluster_rows = FALSE,
+  cluster_columns = FALSE,
+  column_names_side = "top",
+  row_names_gp = gpar(fontsize = 10),
+  column_names_gp = gpar(fontsize = 10),
+  column_names_rot = 360,
+  column_names_centered = TRUE,
+  heatmap_height = unit(5,"cm"),
+  heatmap_width = unit(4, "cm"),
+  row_names_side = "left",
+  heatmap_legend_param = list(title = "P-val", 
+                              at = seq(0, 0.1, by = 0.02), 
+                              labels = c("0", "0.02", "0.04","0.06", "0.08", "0.10")), 
+  cell_fun = function(j, i, x, y, w, h, fill) {
+                           if(!is.na(pvals[i, j]) && pvals[i, j] < 0.0001) {
+                             grid.text("****", x, y)}
+                           else if (!is.na(pvals[i, j]) && pvals[i, j] > 0.0001 && pvals[i, j] < 0.001 ) {
+                             grid.text("***", x, y)}
+                           else if (!is.na(pvals[i, j]) && pvals[i, j] > 0.001 && pvals[i, j] < 0.01 ) {
+                             grid.text("**", x, y)}
+                           else if (!is.na(pvals[i, j]) && pvals[i, j] > 0.01 && pvals[i, j] < 0.05 ) {
+                             grid.text("*", x, y)}
+    })
+
+
+
+
+
+```
+
+
+### Single Cell ORA 
+
+**Figure 4**
+
+From here on is single cell dataset used for figure 4
+
+I then did the same using the single cell dataset - treating them as pseudo bulk. 
+Martirosyan 2024 - astro, micro, neurons, oligodendrocytes
+I will use the same universe as i did for the previous analysis. 
+
+```{r}
+#| label: Single cell input
+#| error: false
+#| warning: false
+#| echo: false
+#| output: false 
+
+astro_Martirosyan_2024 <- read.csv("./4B/data/Martirosyan et al, 2024 /astrocytes_Martirosyan_2024.csv") %>% dplyr::select(Gene,PD.Control.coef) %>% unique() %>% set_names(c("Gene","Coef"))
+
+microglia_Martirosyan_2024 <- read.csv("./4B/data/Martirosyan et al, 2024 /microglia_Martirosyan_2024.csv") %>% dplyr::select(Gene,PD.Control.coef) %>% unique() %>% set_names(c("Gene","Coef"))
+ 
+oligo_Martirosyan_2024 <- read.csv("./4B/data/Martirosyan et al, 2024 /oligodendro_Martirosyan_2024.csv") %>% dplyr::select(Gene, PD.Control.coef) %>% unique() %>% set_names(c("Gene","Coef"))
+
+single_cell_withCoef <- list(Astrocytes = astro_Martirosyan_2024,Microglia = microglia_Martirosyan_2024, Neurons = neurons_Martirosyan_2024, Oligos = oligo_Martirosyan_2024)
+
+single_cell <- list(Astrocytes = astro_Martirosyan_2024$Gene,Microglia = microglia_Martirosyan_2024$Gene, Oligos = oligo_Martirosyan_2024$Gene)
+
+single_cell_withCoef <- list(Astrocytes = astro_Martirosyan_2024,Microglia = microglia_Martirosyan_2024, Oligos = oligo_Martirosyan_2024)
+
+```
+
+```{r}
+#| label: ORA_sc
+#| error: false
+#| warning: false
+#| echo: true
+#| output: true
+options(enrichment_force_universe = TRUE)
+results_list_ORA_sc <- list()
+
+for (x in 1:length(single_cell)) {
+  results_list_ORA_sc[[x]] <- 
+    enricher(gene = single_cell[[x]], 
+             pvalueCutoff = 0.05, 
+             qvalueCutoff = 0.2,
+             pAdjustMethod = "BH", 
+             universe = universe,
+             minGSSize = 10,
+             maxGSSize = 500,
+             gson = NULL,
+             TERM2NAME = NULL,
+             TERM2GENE = T2G)}
+```
+
+
+```{r}
+#| label: pvalues_sc
+#| error: false
+#| warning: false
+#| echo: false
+#| output: false
+
+pvals_sc<- list()
+
+for (x in 1:length(results_list_ORA_sc)) {
+  if (!is.null(results_list_ORA_sc[[x]])) {
+    pvals_sc[[x]] <- results_list_ORA_sc[[x]]@result$p.adjust
+    names(pvals_sc[[x]]) <- results_list_ORA_sc[[x]]@result$Description
+  } else {
+    pvals_sc[[x]] <- NA
+    names(pvals_sc[[x]]) <- NA
+    }
+}
+
+names(pvals_sc) <- names(single_cell)
+pvals_sc <- bind_rows(lapply(pvals_sc, function(x) as.data.frame(t(x))), .id = "ID")
+pvals_sc$...1 <- NULL
+rownames(pvals_sc) <- pvals_sc$ID
+
+pvals_sc$ID <- NULL
+pvals_sc <- as.matrix(pvals_sc)
+```
+
+
+```{r, fig.height=4,fig.width = 10.5}
+#| label: Single Cell heatmaps
+#| error: false
+#| warning: false
+#| echo: false
+#| output: true
+geneID_sc<- list()
+for (x in 1:length(results_list_ORA_sc)) {
+  if (!is.null(results_list_ORA_sc[[x]])) {
+    geneID_sc[[x]] <- results_list_ORA_sc[[x]]@result$geneID %>% str_split(.,"/")
+  } else {
+    geneID_sc[[x]] <- NA
+    names(geneID_sc[[x]]) <- NA
+    }
+      
+}
+names(geneID_sc) <- names(single_cell)
+print(geneID_sc)
+
+
+ID_intersect_sc <- list()
+for (x in 1:length(geneID_sc)) {
+  ID_intersect_sc[[x]] <- data.frame(Gene = geneID_sc[[x]][[1]]) %>% left_join(T2G, by = "Gene") %>% left_join(single_cell_withCoef[[x]], by = "Gene")
+}
+
+names(ID_intersect_sc) <- names(geneID_sc)
+
+
+combined_df_sc <- bind_rows(lapply(names(ID_intersect_sc), function(df_name_sc) {
+  df_sc <- ID_intersect_sc[[df_name_sc]]
+  df_sc$DataFrame <- df_name_sc
+  df_sc
+}))
+
+heatmap_data_sc <- combined_df_sc %>%
+  pivot_wider(names_from = DataFrame, values_from = Coef, values_fill = NA) 
+coef_matrix_sc <- as.matrix(heatmap_data_sc %>% select(-Gene, -Term))
+
+# There is one row where fully NA 
+coef_matrix_sc <- coef_matrix_sc[2:13,]
+rownames(coef_matrix_sc) <- paste(heatmap_data_sc$Gene)[2:13]
+
+# Create a heatmap with ComplexHeatmap
+coef_matrix_sc <- t(coef_matrix_sc)
+coef_matrix_sc <- coef_matrix_sc[2:3,]
+
+col_fun_1 <- colorRamp2(c(-1, 0, 1), c("blue", "white", "red"))
+
+# Plot the heatmap
+Heatmap(
+  coef_matrix_sc,
+  col = col_fun_1,
+  name = "Coef",
+  row_names_side = "left",
+  cluster_rows = FALSE,
+  cluster_columns = FALSE,
+  show_row_names = TRUE,
+  row_names_gp = gpar(fontsize = 10),
+  column_names_gp = gpar(fontsize = 8),
+  show_column_names = TRUE,
+  heatmap_width = unit(12, "cm"),
+  heatmap_height = unit(5,"cm"),
+  column_names_side = "top",
+  cell_fun = function(j, i, x, y, w, h, fill) {
+    if(is.na(coef_matrix_sc[i, j])) {
+      grid.text("", x, y)
+    }
+    }
+)
+
+
+Heatmap(
+  pvals_sc,
+  col= col_fun2,
+  cluster_rows = FALSE,
+  cluster_columns = FALSE,
+  column_names_side = "top",
+  row_names_gp = gpar(fontsize = 10),
+  column_names_gp = gpar(fontsize = 10),
+  column_names_rot = 360,
+  column_names_centered = TRUE,
+  heatmap_height = unit(5,"cm"),
+  heatmap_width = unit(3.4, "cm"),
+  row_names_side = "left",
+  heatmap_legend_param = list(title = "P-val", 
+                              at = seq(0, 0.1, by = 0.02), 
+                              labels = c("0", "0.02", "0.04","0.06", "0.08", "0.10")), 
+  cell_fun = function(j, i, x, y, w, h, fill) {
+                           if(!is.na(pvals_sc[i, j]) && pvals_sc[i, j] < 0.0001) {
+                             grid.text("****", x, y)}
+                           else if (!is.na(pvals_sc[i, j]) && pvals_sc[i, j] > 0.0001 && pvals_sc[i, j] < 0.001 ) {
+                             grid.text("***", x, y)}
+                           else if (!is.na(pvals_sc[i, j]) && pvals_sc[i, j] > 0.001 && pvals_sc[i, j] < 0.01 ) {
+                             grid.text("**", x, y)}
+                           else if (!is.na(pvals_sc[i, j]) && pvals_sc[i, j] > 0.01 && pvals_sc[i, j] < 0.05 ) {
+                             grid.text("*", x, y)}
+    else if (is.na(pvals_sc[i, j])) {grid.text("-", x, y)}
+             })
+
+heatmap1_grob_sc <- grid.grabExpr(draw(Heatmap1_sc))
+heatmap2_grob_sc <- grid.grabExpr(draw(Heatmap2_sc))
+
+grid.arrange(heatmap1_grob_sc, heatmap2_grob_sc, ncol = 1)
+```
