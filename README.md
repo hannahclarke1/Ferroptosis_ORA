@@ -4,4 +4,5 @@ Code used for the overrepresentation analysis of publicly available datasets and
 
 Aim: To investigate if ferroptosis related genes from FerrDB version 2 were overrepresented in publically avilable Parkinson's Disease transcriptomic datasets. 
 
-This work is utilised in **The A53T SNCA mutation sensitizes human neurons and microglia to ferroptosis** Mahoney-Sanchez & Lucas-Clarke 2025. 
+This work is utilised in **The SNCA A53T mutation sensitizes human neurons and microglia to
+ferroptosis** Mahoney-Sanchez & Lucas-Clarke 2025. 
